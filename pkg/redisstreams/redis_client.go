@@ -35,6 +35,7 @@ const ReadFromLatest = "$"
 var RedisContext = context.Background()
 
 // RedisClient datatype to hold redis client attributes.
+// TODO: can probably make lowercase
 type RedisClient struct {
 	Client redis.UniversalClient
 }
