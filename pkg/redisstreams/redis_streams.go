@@ -2,8 +2,10 @@ package redisstreams
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -167,7 +169,8 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 
 		xstreams, err := rsSource.processXReadResult("0-0", remainingMsgs, 0*time.Second)
 		if err != nil {
-			return rsSource.processReadError(xstreams, origMessages, err)
+			rsSource.Log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
+			return
 		}
 
 		// NOTE: If all messages have been delivered and acknowledged, the XREADGROUP 0-0 call returns an empty
@@ -185,24 +188,25 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 		}
 
 		if time.Now().Compare(finalTime) >= 0 || remainingMsgs <= 0 {
-			// todo: return
+			return
 		}
 	}
 
 	// get undelivered messages up to the count we want and block until the timeout
 	if !rsSource.checkBackLog {
-		remainingTime := 0 * time.Second
-		if readRequest.TimeOut() > 0 {
-			remainingTime = time.Now().Sub(finalTime)
-			if int64(remainingTime) < 0 {
-				// todo: return
-			}
+		//remainingTime := 0 * time.Second
+		//if readRequest.TimeOut() > 0 {
+		remainingTime := finalTime.Sub(time.Now())
+		if int64(remainingTime) < 0 {
+			return
 		}
+		//}
 		// this call will block until either the "remainingMsgs" count has been fulfilled or the remainingTime has elapsed
 		// note: if we ever need true "streaming" here, we should instead repeatedly call with no timeout
-		xstreams, err := rsSource.processXReadResult(">", remainingMsgs, remainingTime)
+		_, err := rsSource.processXReadResult(">", remainingMsgs, remainingTime)
 		if err != nil {
-			return rsSource.processReadError(xstreams, origMessages, err)
+			rsSource.Log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
+			return
 		}
 	}
 
@@ -210,6 +214,14 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 
 // Ack acknowledges the data from the source.
 func (rsSource *redisStreamsSource) Ack(_ context.Context, request sourcesdk.AckRequest) {
+	offsets := request.Offsets()
+	strOffsets := make([]string, len(offsets))
+	for i, o := range offsets {
+		strOffsets[i] = string(o.Value())
+	}
+	if err := rsSource.Client.XAck(RedisContext, rsSource.Stream, rsSource.Group, strOffsets...).Err(); err != nil {
+		rsSource.Log.Errorf("Error performing Ack on offsets %+v: %v", offsets, err)
+	}
 
 }
 
@@ -228,7 +240,7 @@ func (rsSource *redisStreamsSource) processXReadResult(startIndex string, count 
 		Consumer: rsSource.Consumer,
 		Streams:  []string{rsSource.Stream, startIndex},
 		Count:    count,
-		Block:    blockDuration, // todo: verify that passing in 0 effectively causes it not to block
+		Block:    blockDuration, // todo: verify that passing in 0 effectively causes it not to block but does allow it to execute
 	})
 	xstreams, err := result.Result()
 	if err != nil {
@@ -248,7 +260,7 @@ func (rsSource *redisStreamsSource) processXReadResult(startIndex string, count 
 		}
 	}
 
-	//return result.Result()
+	return xstreams, nil
 }
 
 func (rsSource *redisStreamsSource) xStreamToMessages(xstream redis.XStream) ([]*sourcesdk.Message, error) {
@@ -257,7 +269,7 @@ func (rsSource *redisStreamsSource) xStreamToMessages(xstream redis.XStream) ([]
 		var outMsg *sourcesdk.Message
 		var err error
 		if len(message.Values) >= 1 {
-			outMsg, err = rsSource.produceMsg(message)
+			outMsg, err = produceMsg(message)
 			if err != nil {
 				return nil, err
 			}
@@ -270,4 +282,53 @@ func (rsSource *redisStreamsSource) xStreamToMessages(xstream redis.XStream) ([]
 	}
 
 	return messages, nil
+}
+
+func produceMsg(inMsg redis.XMessage) (*sourcesdk.Message, error) {
+	//var readOffset = redis2.NewRedisOffset(inMsg.ID, replica)
+	var readOffset = sourcesdk.NewSimpleOffset([]byte(inMsg.ID)) //todo: can we make a function like this?
+
+	jsonSerialized, err := json.Marshal(inMsg.Values)
+	if err != nil {
+		return nil, fmt.Errorf("failed to json serialize RedisStream values: %v; inMsg=%+v", err, inMsg)
+	}
+	var keys []string
+	for k := range inMsg.Values {
+		keys = append(keys, k)
+	}
+
+	msgTime, err := msgIdToTime(inMsg.ID)
+	if err != nil {
+		return nil, err
+	}
+	isbMsg := isb.Message{
+		Header: isb.Header{
+			MessageInfo: isb.MessageInfo{EventTime: msgTime},
+			ID:          inMsg.ID,
+			Keys:        keys,
+		},
+		Body: isb.Body{Payload: jsonSerialized},
+	}
+
+	return &isb.ReadMessage{
+		ReadOffset: readOffset,
+		Message:    isbMsg,
+	}, nil
+}
+
+// the ID of the message is formatted <msecTime>-<index>
+func msgIdToTime(id string) (time.Time, error) {
+	splitStr := strings.Split(id, "-")
+	if len(splitStr) != 2 {
+		return time.Time{}, fmt.Errorf("unexpected message ID value for Redis Streams: %s", id)
+	}
+	timeMsec, err := strconv.ParseInt(splitStr[0], 10, 64)
+	if err != nil {
+		return time.Time{}, err
+	}
+	mSecRemainder := timeMsec % 1000
+	t := time.Unix(timeMsec/1000, mSecRemainder*1000000)
+
+	return t, nil
+
 }
