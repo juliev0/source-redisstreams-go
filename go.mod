@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/numaproj/numaflow v0.10.0
-	github.com/numaproj/numaflow-go v0.5.0
+	github.com/numaproj/numaflow-go v0.5.1-0.20230912211616-62600351d97f
 	github.com/redis/go-redis/v9 v9.1.0
 	go.uber.org/zap v1.25.0
 	gopkg.in/yaml.v2 v2.4.0

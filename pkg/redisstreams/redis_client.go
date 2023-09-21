@@ -26,9 +26,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const ReadFromEarliest = "0-0"
-const ReadFromLatest = "$"
-
 // RedisContext is used to pass the context specifically for REDIS operations.
 // A cancelled context during SIGTERM or Ctrl-C that is propagated down will throw a context cancelled error because redis uses context to obtain connection from the connection pool.
 // All redis operations will use the below no-op context.Background() to try to process in-flight messages that we have received prior to the cancellation of the context.

@@ -3,6 +3,7 @@ package redisstreams
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -77,7 +78,7 @@ func New(c *config.Config) (*redisStreamsSource, error) {
 	}
 
 	// create the ConsumerGroup here if not already created
-	err = redisStreamsSource.createConsumerGroup(ctx, c)
+	err = redisStreamsSource.createConsumerGroup(context.Background(), c)
 	if err != nil {
 		return nil, err
 	}
@@ -147,11 +148,14 @@ func (rsSource *redisStreamsSource) Pending(_ context.Context) int64 {
 			return group.Lag
 		}
 	}
-	return isb.PendingNotAvailable, fmt.Errorf("ConsumerGroup %q not found in XInfoGroups result %+v", rsSource.Group, groups)
+	rsSource.Log.Errorf("ConsumerGroup %q not found in XInfoGroups result %+v", rsSource.Group, groups)
+	return isb.PendingNotAvailable
 
 }
 
 func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesdk.ReadRequest, messageCh chan<- sourcesdk.Message) {
+
+	rsSource.Log.Debugf("Ready to Read: count=%d, duration=%+v", readRequest.Count(), readRequest.TimeOut())
 
 	functionStartTime := time.Now()
 	//blocking := (int64(readRequest.TimeOut()) > 0)
@@ -159,7 +163,7 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 	//if blocking {
 	finalTime = functionStartTime.Add(readRequest.TimeOut())
 	//}
-	remainingMsgs := readRequest.Count()
+	remainingMsgs := int(readRequest.Count())
 
 	// if there are messages previously delivered to us that we didn't acknowledge, repeatedly check for that until there are no
 	// messages returned, or until we reach timeout
@@ -167,7 +171,7 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 
 	for rsSource.checkBackLog {
 
-		xstreams, err := rsSource.processXReadResult("0-0", remainingMsgs, 0*time.Second)
+		xstreams, err := rsSource.processXReadResult("0-0", int64(remainingMsgs), 0*time.Second, messageCh)
 		if err != nil {
 			rsSource.Log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
 			return
@@ -175,7 +179,7 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 
 		// NOTE: If all messages have been delivered and acknowledged, the XREADGROUP 0-0 call returns an empty
 		// list of messages in the stream. At this point we want to read everything from last delivered which would be indicated by ">"
-		if len(xstreams) == 1 {
+		if xstreams != nil && len(xstreams) == 1 {
 			if len(xstreams[0].Messages) == 0 {
 				rsSource.Log.Infow("We have delivered and acknowledged all PENDING msgs, setting checkBacklog to false")
 				rsSource.checkBackLog = false
@@ -188,7 +192,10 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 		}
 
 		if time.Now().Compare(finalTime) >= 0 || remainingMsgs <= 0 {
+			rsSource.Log.Infof("deletethis: checkBackLog=true; returning; finalTime=%+v, time remaining=%+v, remainingMsgs=%d", finalTime, finalTime.Sub(time.Now()), remainingMsgs)
 			return
+		} else {
+
 		}
 	}
 
@@ -198,12 +205,15 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 		//if readRequest.TimeOut() > 0 {
 		remainingTime := finalTime.Sub(time.Now())
 		if int64(remainingTime) < 0 {
+			rsSource.Log.Infof("deletethis: checkBackLog=false; returning: out of time, finalTime=%+v", finalTime)
 			return
+		} else {
+			rsSource.Log.Infof("deletethis: checkBackLog=false; about to call processXReadResult(), finalTime=%+v, remainingTime=%+v", finalTime, remainingTime)
 		}
 		//}
 		// this call will block until either the "remainingMsgs" count has been fulfilled or the remainingTime has elapsed
 		// note: if we ever need true "streaming" here, we should instead repeatedly call with no timeout
-		_, err := rsSource.processXReadResult(">", remainingMsgs, remainingTime)
+		_, err := rsSource.processXReadResult(">", int64(remainingMsgs), remainingTime, messageCh)
 		if err != nil {
 			rsSource.Log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
 			return
@@ -235,6 +245,8 @@ func (rsSource *redisStreamsSource) Close() error {
 // for any messages read, stream them back on message channel
 func (rsSource *redisStreamsSource) processXReadResult(startIndex string, count int64, blockDuration time.Duration, messageCh chan<- sourcesdk.Message) ([]redis.XStream, error) {
 
+	rsSource.Log.Debugf("XReadGroup: startIndex=%d, count=%d, blockDuration=%+v", startIndex, count, blockDuration)
+
 	result := rsSource.Client.XReadGroup(RedisContext, &redis.XReadGroupArgs{
 		Group:    rsSource.Group,
 		Consumer: rsSource.Consumer,
@@ -244,6 +256,10 @@ func (rsSource *redisStreamsSource) processXReadResult(startIndex string, count 
 	})
 	xstreams, err := result.Result()
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, redis.Nil) {
+			rsSource.Log.Debugf("redis.Nil/context cancelled, startIndex=%d, err=%v", startIndex, err)
+			return nil, nil
+		}
 		return xstreams, err
 	}
 	if len(xstreams) > 1 {
@@ -285,8 +301,8 @@ func (rsSource *redisStreamsSource) xStreamToMessages(xstream redis.XStream) ([]
 }
 
 func produceMsg(inMsg redis.XMessage) (*sourcesdk.Message, error) {
-	//var readOffset = redis2.NewRedisOffset(inMsg.ID, replica)
-	var readOffset = sourcesdk.NewSimpleOffset([]byte(inMsg.ID)) //todo: can we make a function like this?
+	var readOffset = sourcesdk.NewOffset([]byte(inMsg.ID), "0")
+	//var readOffset = sourcesdk.NewSimpleOffset([]byte(inMsg.ID)) //todo: can we make a function like this?
 
 	jsonSerialized, err := json.Marshal(inMsg.Values)
 	if err != nil {
@@ -301,7 +317,7 @@ func produceMsg(inMsg redis.XMessage) (*sourcesdk.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	isbMsg := isb.Message{
+	/*isbMsg := isb.Message{
 		Header: isb.Header{
 			MessageInfo: isb.MessageInfo{EventTime: msgTime},
 			ID:          inMsg.ID,
@@ -313,7 +329,14 @@ func produceMsg(inMsg redis.XMessage) (*sourcesdk.Message, error) {
 	return &isb.ReadMessage{
 		ReadOffset: readOffset,
 		Message:    isbMsg,
-	}, nil
+	}, nil*/
+
+	msg := sourcesdk.NewMessage(
+		jsonSerialized,
+		readOffset,
+		msgTime)
+
+	return &msg, nil
 }
 
 // the ID of the message is formatted <msecTime>-<index>
