@@ -9,41 +9,41 @@ import (
 type Config struct {
 	// Redis URL
 	// +optional
-	URL string `json:"url,omitempty" protobuf:"bytes,1,opt,name=url"`
+	URL string `yaml:"url,omitempty" protobuf:"bytes,1,opt,name=url"` //todo: do we need protobuf? todo: should nats also use yaml tags for casing issue?
 	// Sentinel URL, will be ignored if Redis URL is provided
 	// +optional
-	SentinelURL string `json:"sentinelUrl,omitempty" protobuf:"bytes,2,opt,name=sentinelUrl"`
+	SentinelURL string `yaml:"sentinelUrl,omitempty" protobuf:"bytes,2,opt,name=sentinelUrl"`
 	// Only required when Sentinel is used
 	// +optional
-	MasterName string `json:"masterName,omitempty" protobuf:"bytes,3,opt,name=masterName"`
+	MasterName string `yaml:"masterName,omitempty" protobuf:"bytes,3,opt,name=masterName"`
 	// Redis user
 	// +optional
-	User string `json:"user,omitempty" protobuf:"bytes,4,opt,name=user"`
+	User string `yaml:"user,omitempty" protobuf:"bytes,4,opt,name=user"`
 	// Redis password secret selector
 	// +optional
-	Password *corev1.SecretKeySelector `json:"password,omitempty" protobuf:"bytes,5,opt,name=password"`
+	Password *corev1.SecretKeySelector `yaml:"password,omitempty" protobuf:"bytes,5,opt,name=password"`
 	// Sentinel password secret selector
 	// +optional
-	SentinelPassword *corev1.SecretKeySelector `json:"sentinelPassword,omitempty" protobuf:"bytes,6,opt,name=sentinelPassword"`
-	Stream           string                    `json:"stream" protobuf:"bytes,7,opt,name=stream"`
-	ConsumerGroup    string                    `json:"consumerGroup" protobuf:"bytes,8,opt,name=consumerGroup"`
+	SentinelPassword *corev1.SecretKeySelector `yaml:"sentinelPassword,omitempty" protobuf:"bytes,6,opt,name=sentinelPassword"`
+	Stream           string                    `yaml:"stream" protobuf:"bytes,7,opt,name=stream"`
+	ConsumerGroup    string                    `yaml:"consumerGroup" protobuf:"bytes,8,opt,name=consumerGroup"`
 	// if true, stream starts being read from the beginning; otherwise, the latest
-	ReadFromBeginning bool `json:"readFromBeginning" protobuf:"bytes,9,opt,name=readFromBeginning"`
+	ReadFromBeginning bool `yaml:"readFromBeginning" protobuf:"bytes,9,opt,name=readFromBeginning"`
 	// +optional
-	TLS *TLS `json:"tls" protobuf:"bytes,10,opt,name=tls"`
+	TLS *TLS `yaml:"tls" protobuf:"bytes,10,opt,name=tls"`
 }
 
 // TLS defines the TLS configuration for the Nats client.
 type TLS struct {
 	// +optional
-	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty" protobuf:"bytes,1,opt,name=insecureSkipVerify"`
+	InsecureSkipVerify bool `yaml:"insecureSkipVerify,omitempty" protobuf:"bytes,1,opt,name=insecureSkipVerify"`
 	// CACertSecret refers to the secret that contains the CA cert
 	// +optional
-	CACertSecret *corev1.SecretKeySelector `json:"caCertSecret,omitempty" protobuf:"bytes,2,opt,name=caCertSecret"`
+	CACertSecret *corev1.SecretKeySelector `yaml:"caCertSecret,omitempty" protobuf:"bytes,2,opt,name=caCertSecret"`
 	// CertSecret refers to the secret that contains the cert
 	// +optional
-	CertSecret *corev1.SecretKeySelector `json:"clientCertSecret,omitempty" protobuf:"bytes,3,opt,name=certSecret"`
+	CertSecret *corev1.SecretKeySelector `yaml:"clientCertSecret,omitempty" protobuf:"bytes,3,opt,name=certSecret"`
 	// KeySecret refers to the secret that contains the key
 	// +optional
-	KeySecret *corev1.SecretKeySelector `json:"clientKeySecret,omitempty" protobuf:"bytes,4,opt,name=keySecret"`
+	KeySecret *corev1.SecretKeySelector `yaml:"clientKeySecret,omitempty" protobuf:"bytes,4,opt,name=keySecret"`
 }
