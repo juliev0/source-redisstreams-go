@@ -15,13 +15,13 @@ import (
 func main() {
 	logger := utils.NewLogger()
 
-	config, err := getConfigFromFile()
+	config, err := getConfigFromFile() // todo: probably turn into an environment variable
 	if err != nil {
 		logger.Panic("Failed to parse config file : ", err)
 	} else {
 		logger.Infof("Successfully parsed config file: %+v", config)
 	}
-	redisStreamsSource, err := redisstreams.New(config)
+	redisStreamsSource, err := redisstreams.New(config, logger)
 
 	if err != nil {
 		logger.Panic("Failed to create redis streams source : ", err)
@@ -35,7 +35,7 @@ func main() {
 	}
 }
 
-func getConfigFromFile() (*config.Config, error) {
+func getConfigFromFile() (*config.RedisStreamsSourceConfig, error) {
 	parser := &config.YAMLConfigParser{}
 	content, err := os.ReadFile(fmt.Sprintf("%s/config.yaml", utils.ConfigVolumePath))
 	if err != nil {

@@ -4,8 +4,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// Config defines the configuration for the RedisStreams user-defined source
-type Config struct {
+// RedisStreamsSourceConfig defines the configuration for the RedisStreams user-defined source
+type RedisStreamsSourceConfig struct {
 	// Redis URL
 	// +optional
 	URL string `yaml:"url,omitempty"`

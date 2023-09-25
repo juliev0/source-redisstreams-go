@@ -31,13 +31,13 @@ type redisStreamsSource struct {
 const ReadFromEarliest = "0-0"
 const ReadFromLatest = "$"
 
-func New(c *config.Config) (*redisStreamsSource, error) {
+func New(c *config.RedisStreamsSourceConfig, logger *zap.SugaredLogger) (*redisStreamsSource, error) {
 	redisClient, err := newRedisClient(c)
 	if err != nil {
 		return nil, err
 	}
 
-	replica := os.Getenv("NUMAFLOW_REPLICA")
+	replica := os.Getenv("NUMAFLOW_REPLICA") // todo: check this was set correctly
 	if replica == "" {
 		return nil, fmt.Errorf("NUMAFLOW_REPLICA environment variable not set: can't set Consumer name")
 	}
@@ -48,7 +48,7 @@ func New(c *config.Config) (*redisStreamsSource, error) {
 		consumer:     fmt.Sprintf("%s-%v", c.ConsumerGroup, replica),
 		checkBackLog: true,
 		redisClient:  redisClient,
-		log:          utils.NewLogger(),
+		log:          logger,
 	}
 
 	// create the ConsumerGroup here if not already created
@@ -61,7 +61,7 @@ func New(c *config.Config) (*redisStreamsSource, error) {
 }
 
 // create a RedisClient
-func newRedisClient(c *config.Config) (*redisClient, error) {
+func newRedisClient(c *config.RedisStreamsSourceConfig) (*redisClient, error) {
 	volumeReader := utils.NewVolumeReader(utils.SecretVolumePath)
 	password, _ := volumeReader.GetSecretFromVolume(c.Password)
 	opts := &redis.UniversalOptions{
@@ -87,7 +87,7 @@ func newRedisClient(c *config.Config) (*redisClient, error) {
 	return NewRedisClient(opts), nil
 }
 
-func (rsSource *redisStreamsSource) createConsumerGroup(ctx context.Context, c *config.Config) error {
+func (rsSource *redisStreamsSource) createConsumerGroup(ctx context.Context, c *config.RedisStreamsSourceConfig) error {
 	// user can configure to read stream either from the beginning or from the most recent messages
 	readFrom := ReadFromLatest
 	if c.ReadFromBeginning {
@@ -216,7 +216,7 @@ func (rsSource *redisStreamsSource) Close() error {
 // for any messages read, stream them back on message channel
 func (rsSource *redisStreamsSource) processXReadResult(startIndex string, count int64, blockDuration time.Duration, messageCh chan<- sourcesdk.Message) ([]redis.XStream, error) {
 
-	rsSource.log.Debugf("XReadGroup: startIndex=%d, count=%d, blockDuration=%+v", startIndex, count, blockDuration)
+	rsSource.log.Debugf("XReadGroup: startIndex=%q, count=%d, blockDuration=%+v", startIndex, count, blockDuration)
 
 	result := rsSource.Client.XReadGroup(RedisContext, &redis.XReadGroupArgs{
 		Group:    rsSource.group,
@@ -228,7 +228,7 @@ func (rsSource *redisStreamsSource) processXReadResult(startIndex string, count 
 	xstreams, err := result.Result()
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, redis.Nil) {
-			rsSource.log.Debugf("redis.Nil/context cancelled, startIndex=%d, err=%v", startIndex, err)
+			rsSource.log.Debugf("redis.Nil/context cancelled, startIndex=%q, err=%v", startIndex, err)
 			return nil, nil
 		}
 		return xstreams, err
@@ -252,6 +252,7 @@ func (rsSource *redisStreamsSource) processXReadResult(startIndex string, count 
 
 func (rsSource *redisStreamsSource) xStreamToMessages(xstream redis.XStream) ([]*sourcesdk.Message, error) {
 	messages := []*sourcesdk.Message{}
+	rsSource.log.Debugf("Read %d messages", len(xstream.Messages))
 	for _, message := range xstream.Messages {
 		var outMsg *sourcesdk.Message
 		var err error
