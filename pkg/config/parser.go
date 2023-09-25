@@ -4,8 +4,6 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-//TODO: move to shared location
-
 // Parser is an interface for parsing a string into a Config object
 type Parser interface {
 	// Parse parses a string into a Config object

@@ -18,44 +18,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// TODO: could move this
-type Message struct {
-	payload    string
-	readOffset string
-	id         string
-}
-
-/*type Options struct {
-	// ReadTimeOut is the timeout needed for read timeout
-	ReadTimeOut time.Duration //todo: consider if we need this now that we are reading asynchronously
-}*/
-
 type redisStreamsSource struct {
-	//TODO: can probably make these lower case
-	Stream   string
-	Group    string
-	Consumer string
-	//PartitionIdx int32
+	stream       string
+	group        string
+	consumer     string
 	checkBackLog bool
 
-	*RedisClient
-	//Options // TODO: make sure these get incorporated but not as options
-	Log *zap.SugaredLogger
+	*redisClient
+	log *zap.SugaredLogger
 }
 
 const ReadFromEarliest = "0-0"
 const ReadFromLatest = "$"
-
-//type Option func(*redisStreamsSource) error
-
-/*
-// WithReadTimeOut sets the read timeout
-func WithReadTimeOut(t time.Duration) Option {
-	return func(o *redisStreamsSource) error {
-		o.Options.ReadTimeOut = t
-		return nil
-	}
-}*/
 
 func New(c *config.Config) (*redisStreamsSource, error) {
 	redisClient, err := newRedisClient(c)
@@ -69,12 +43,12 @@ func New(c *config.Config) (*redisStreamsSource, error) {
 	}
 
 	redisStreamsSource := &redisStreamsSource{
-		Stream:       c.Stream,
-		Group:        c.ConsumerGroup,
-		Consumer:     fmt.Sprintf("%s-%v", c.ConsumerGroup, replica),
+		stream:       c.Stream,
+		group:        c.ConsumerGroup,
+		consumer:     fmt.Sprintf("%s-%v", c.ConsumerGroup, replica),
 		checkBackLog: true,
-		RedisClient:  redisClient,
-		Log:          utils.NewLogger(),
+		redisClient:  redisClient,
+		log:          utils.NewLogger(),
 	}
 
 	// create the ConsumerGroup here if not already created
@@ -87,7 +61,7 @@ func New(c *config.Config) (*redisStreamsSource, error) {
 }
 
 // create a RedisClient
-func newRedisClient(c *config.Config) (*RedisClient, error) {
+func newRedisClient(c *config.Config) (*redisClient, error) {
 	volumeReader := utils.NewVolumeReader(utils.SecretVolumePath)
 	password, _ := volumeReader.GetSecretFromVolume(c.Password)
 	opts := &redis.UniversalOptions{
@@ -119,13 +93,13 @@ func (rsSource *redisStreamsSource) createConsumerGroup(ctx context.Context, c *
 	if c.ReadFromBeginning {
 		readFrom = ReadFromEarliest
 	}
-	rsSource.Log.Infof("Creating Redis Stream group %q on Stream %q (readFrom=%v)", rsSource.Group, rsSource.Stream, readFrom)
-	err := rsSource.RedisClient.CreateStreamGroup(ctx, rsSource.Stream, rsSource.Group, readFrom)
+	rsSource.log.Infof("Creating Redis Stream group %q on Stream %q (readFrom=%v)", rsSource.group, rsSource.stream, readFrom)
+	err := rsSource.redisClient.CreateStreamGroup(ctx, rsSource.stream, rsSource.group, readFrom)
 	if err != nil {
 		if IsAlreadyExistError(err) {
-			rsSource.Log.Infow("Consumer Group on Stream already exists.", zap.String("group", rsSource.Group), zap.String("stream", rsSource.Stream))
+			rsSource.log.Infow("Consumer Group on Stream already exists.", zap.String("group", rsSource.group), zap.String("stream", rsSource.stream))
 		} else {
-			return fmt.Errorf("failed to create consumer group %q on redis stream %q: err=%v", rsSource.Group, rsSource.Stream, err)
+			return fmt.Errorf("failed to create consumer group %q on redis stream %q: err=%v", rsSource.group, rsSource.stream, err)
 		}
 	}
 	return nil
@@ -136,33 +110,30 @@ func (rsSource *redisStreamsSource) Pending(_ context.Context) int64 {
 	// try calling XINFO GROUPS <stream> and look for 'Lag' key.
 	// For Redis Server < v7.0, this always returns 0; therefore it's recommended to use >= v7.0
 
-	result := rsSource.Client.XInfoGroups(RedisContext, rsSource.Stream)
+	result := rsSource.Client.XInfoGroups(RedisContext, rsSource.stream)
 	groups, err := result.Result()
 	if err != nil {
-		rsSource.Log.Errorf("error calling XInfoGroups: %v", err)
+		rsSource.log.Errorf("error calling XInfoGroups: %v", err)
 		return isb.PendingNotAvailable
 	}
 	// find our ConsumerGroup
 	for _, group := range groups {
-		if group.Name == rsSource.Group {
+		if group.Name == rsSource.group {
 			return group.Lag
 		}
 	}
-	rsSource.Log.Errorf("ConsumerGroup %q not found in XInfoGroups result %+v", rsSource.Group, groups)
+	rsSource.log.Errorf("ConsumerGroup %q not found in XInfoGroups result %+v", rsSource.group, groups)
 	return isb.PendingNotAvailable
 
 }
 
 func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesdk.ReadRequest, messageCh chan<- sourcesdk.Message) {
 
-	rsSource.Log.Debugf("Ready to Read: count=%d, duration=%+v", readRequest.Count(), readRequest.TimeOut())
+	rsSource.log.Debugf("Ready to Read: count=%d, duration=%+v", readRequest.Count(), readRequest.TimeOut())
 
 	functionStartTime := time.Now()
-	//blocking := (int64(readRequest.TimeOut()) > 0)
 	var finalTime time.Time
-	//if blocking {
 	finalTime = functionStartTime.Add(readRequest.TimeOut())
-	//}
 	remainingMsgs := int(readRequest.Count())
 
 	// if there are messages previously delivered to us that we didn't acknowledge, repeatedly check for that until there are no
@@ -173,7 +144,7 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 
 		xstreams, err := rsSource.processXReadResult("0-0", int64(remainingMsgs), 0*time.Second, messageCh)
 		if err != nil {
-			rsSource.Log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
+			rsSource.log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
 			return
 		}
 
@@ -181,7 +152,7 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 		// list of messages in the stream. At this point we want to read everything from last delivered which would be indicated by ">"
 		if xstreams != nil && len(xstreams) == 1 {
 			if len(xstreams[0].Messages) == 0 {
-				rsSource.Log.Infow("We have delivered and acknowledged all PENDING msgs, setting checkBacklog to false")
+				rsSource.log.Infow("We have delivered and acknowledged all PENDING msgs, setting checkBacklog to false")
 				rsSource.checkBackLog = false
 				break
 			} else {
@@ -192,7 +163,7 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 		}
 
 		if time.Now().Compare(finalTime) >= 0 || remainingMsgs <= 0 {
-			rsSource.Log.Infof("deletethis: checkBackLog=true; returning; finalTime=%+v, time remaining=%+v, remainingMsgs=%d", finalTime, finalTime.Sub(time.Now()), remainingMsgs)
+			rsSource.log.Infof("deletethis: checkBackLog=true; returning; finalTime=%+v, time remaining=%+v, remainingMsgs=%d", finalTime, finalTime.Sub(time.Now()), remainingMsgs)
 			return
 		} else {
 
@@ -205,17 +176,17 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 		//if readRequest.TimeOut() > 0 {
 		remainingTime := finalTime.Sub(time.Now())
 		if int64(remainingTime) < 0 {
-			rsSource.Log.Infof("deletethis: checkBackLog=false; returning: out of time, finalTime=%+v", finalTime)
+			rsSource.log.Infof("deletethis: checkBackLog=false; returning: out of time, finalTime=%+v", finalTime)
 			return
 		} else {
-			rsSource.Log.Infof("deletethis: checkBackLog=false; about to call processXReadResult(), finalTime=%+v, remainingTime=%+v", finalTime, remainingTime)
+			rsSource.log.Infof("deletethis: checkBackLog=false; about to call processXReadResult(), finalTime=%+v, remainingTime=%+v", finalTime, remainingTime)
 		}
 		//}
 		// this call will block until either the "remainingMsgs" count has been fulfilled or the remainingTime has elapsed
 		// note: if we ever need true "streaming" here, we should instead repeatedly call with no timeout
 		_, err := rsSource.processXReadResult(">", int64(remainingMsgs), remainingTime, messageCh)
 		if err != nil {
-			rsSource.Log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
+			rsSource.log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
 			return
 		}
 	}
@@ -229,15 +200,15 @@ func (rsSource *redisStreamsSource) Ack(_ context.Context, request sourcesdk.Ack
 	for i, o := range offsets {
 		strOffsets[i] = string(o.Value())
 	}
-	if err := rsSource.Client.XAck(RedisContext, rsSource.Stream, rsSource.Group, strOffsets...).Err(); err != nil {
-		rsSource.Log.Errorf("Error performing Ack on offsets %+v: %v", offsets, err)
+	if err := rsSource.Client.XAck(RedisContext, rsSource.stream, rsSource.group, strOffsets...).Err(); err != nil {
+		rsSource.log.Errorf("Error performing Ack on offsets %+v: %v", offsets, err)
 	}
 
 }
 
 func (rsSource *redisStreamsSource) Close() error {
-	rsSource.Log.Info("Shutting down redis streams source server...")
-	rsSource.Log.Info("Redis streams source server shutdown")
+	rsSource.log.Info("Shutting down redis streams source server...")
+	rsSource.log.Info("Redis streams source server shutdown")
 	return nil
 }
 
@@ -245,25 +216,25 @@ func (rsSource *redisStreamsSource) Close() error {
 // for any messages read, stream them back on message channel
 func (rsSource *redisStreamsSource) processXReadResult(startIndex string, count int64, blockDuration time.Duration, messageCh chan<- sourcesdk.Message) ([]redis.XStream, error) {
 
-	rsSource.Log.Debugf("XReadGroup: startIndex=%d, count=%d, blockDuration=%+v", startIndex, count, blockDuration)
+	rsSource.log.Debugf("XReadGroup: startIndex=%d, count=%d, blockDuration=%+v", startIndex, count, blockDuration)
 
 	result := rsSource.Client.XReadGroup(RedisContext, &redis.XReadGroupArgs{
-		Group:    rsSource.Group,
-		Consumer: rsSource.Consumer,
-		Streams:  []string{rsSource.Stream, startIndex},
+		Group:    rsSource.group,
+		Consumer: rsSource.consumer,
+		Streams:  []string{rsSource.stream, startIndex},
 		Count:    count,
 		Block:    blockDuration, // todo: verify that passing in 0 effectively causes it not to block but does allow it to execute
 	})
 	xstreams, err := result.Result()
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, redis.Nil) {
-			rsSource.Log.Debugf("redis.Nil/context cancelled, startIndex=%d, err=%v", startIndex, err)
+			rsSource.log.Debugf("redis.Nil/context cancelled, startIndex=%d, err=%v", startIndex, err)
 			return nil, nil
 		}
 		return xstreams, err
 	}
 	if len(xstreams) > 1 {
-		rsSource.Log.Warnf("redisStreamsSource shouldn't have more than one Stream; xstreams=%+v", xstreams)
+		rsSource.log.Warnf("redisStreamsSource shouldn't have more than one Stream; xstreams=%+v", xstreams)
 		return xstreams, nil
 	} else if len(xstreams) == 1 {
 		msgs, err := rsSource.xStreamToMessages(xstreams[0])
@@ -291,7 +262,7 @@ func (rsSource *redisStreamsSource) xStreamToMessages(xstream redis.XStream) ([]
 			}
 		} else {
 			// don't think there should be a message with no values, but if there is...
-			rsSource.Log.Warnf("unexpected: RedisStreams message has no values? message=%+v", message)
+			rsSource.log.Warnf("unexpected: RedisStreams message has no values? message=%+v", message)
 			continue
 		}
 		messages = append(messages, outMsg)

@@ -4,12 +4,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-//TODO: add description
-
+// Config defines the configuration for the RedisStreams user-defined source
 type Config struct {
 	// Redis URL
 	// +optional
-	URL string `yaml:"url,omitempty" protobuf:"bytes,1,opt,name=url"` //todo: do we need protobuf? todo: should nats also use yaml tags for casing issue?
+	URL string `yaml:"url,omitempty"`
 	// Sentinel URL, will be ignored if Redis URL is provided
 	// +optional
 	SentinelURL string `yaml:"sentinelUrl,omitempty" protobuf:"bytes,2,opt,name=sentinelUrl"`

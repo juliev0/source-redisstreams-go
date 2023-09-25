@@ -31,52 +31,51 @@ import (
 // All redis operations will use the below no-op context.Background() to try to process in-flight messages that we have received prior to the cancellation of the context.
 var RedisContext = context.Background()
 
-// RedisClient datatype to hold redis client attributes.
-// TODO: can probably make lowercase
-type RedisClient struct {
+// redisClient datatype to hold redis client attributes.
+type redisClient struct {
 	Client redis.UniversalClient
 }
 
 // NewRedisClient returns a new Redis Client.
-func NewRedisClient(options *redis.UniversalOptions) *RedisClient {
-	client := new(RedisClient)
+func NewRedisClient(options *redis.UniversalOptions) *redisClient {
+	client := new(redisClient)
 	client.Client = redis.NewUniversalClient(options)
 	return client
 }
 
 // CreateStreamGroup creates a redis stream group and creates an empty stream if it does not exist.
-func (cl *RedisClient) CreateStreamGroup(ctx context.Context, stream string, group string, start string) error {
+func (cl *redisClient) CreateStreamGroup(ctx context.Context, stream string, group string, start string) error {
 	return cl.Client.XGroupCreateMkStream(ctx, stream, group, start).Err()
 }
 
 // DeleteStreamGroup deletes the redis stream group.
-func (cl *RedisClient) DeleteStreamGroup(ctx context.Context, stream string, group string) error {
+func (cl *redisClient) DeleteStreamGroup(ctx context.Context, stream string, group string) error {
 	return cl.Client.XGroupDestroy(ctx, stream, group).Err()
 }
 
 // DeleteKeys deletes a redis keys
-func (cl *RedisClient) DeleteKeys(ctx context.Context, keys ...string) error {
+func (cl *redisClient) DeleteKeys(ctx context.Context, keys ...string) error {
 	return cl.Client.Del(ctx, keys...).Err()
 }
 
 // StreamInfo returns redis stream info
-func (cl *RedisClient) StreamInfo(ctx context.Context, streamKey string) (*redis.XInfoStream, error) {
+func (cl *redisClient) StreamInfo(ctx context.Context, streamKey string) (*redis.XInfoStream, error) {
 	return cl.Client.XInfoStream(ctx, streamKey).Result()
 }
 
 // StreamGroupInfo returns redis stream group info
-func (cl *RedisClient) StreamGroupInfo(ctx context.Context, streamKey string) ([]redis.XInfoGroup, error) {
+func (cl *redisClient) StreamGroupInfo(ctx context.Context, streamKey string) ([]redis.XInfoGroup, error) {
 	return cl.Client.XInfoGroups(ctx, streamKey).Result()
 }
 
 // IsStreamExists check the redis keys exists
-func (cl *RedisClient) IsStreamExists(ctx context.Context, streamKey string) bool {
+func (cl *redisClient) IsStreamExists(ctx context.Context, streamKey string) bool {
 	_, err := cl.StreamInfo(ctx, streamKey)
 	return err == nil
 }
 
 // PendingMsgCount returns how many messages are pending.
-func (cl *RedisClient) PendingMsgCount(ctx context.Context, streamKey, consumerGroup string) (int64, error) {
+func (cl *redisClient) PendingMsgCount(ctx context.Context, streamKey, consumerGroup string) (int64, error) {
 	cmd := cl.Client.XPending(ctx, streamKey, consumerGroup)
 	pending, err := cmd.Result()
 	if err != nil {
@@ -86,7 +85,7 @@ func (cl *RedisClient) PendingMsgCount(ctx context.Context, streamKey, consumerG
 }
 
 // IsStreamGroupExists check the stream group exists
-func (cl *RedisClient) IsStreamGroupExists(ctx context.Context, streamKey string, groupName string) bool {
+func (cl *redisClient) IsStreamGroupExists(ctx context.Context, streamKey string, groupName string) bool {
 	result, err := cl.StreamGroupInfo(ctx, streamKey)
 	if err != nil {
 		return false
