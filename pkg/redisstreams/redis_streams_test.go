@@ -31,8 +31,6 @@ For Read():
 var (
 	redisURI = ":6379"
 
-	streamName = "test-stream"
-
 	consumerGroupName = "my-group"
 
 	redisOptions = &redis.UniversalOptions{
@@ -43,6 +41,10 @@ var (
 
 	//multipleKeysValuesJson = json.Marshal(multipleKeysValues)
 )
+
+func init() {
+	os.Setenv("NUMAFLOW_DEBUG", "true")
+}
 
 type readRequest struct {
 	count   uint64
@@ -67,13 +69,39 @@ func (a *ackRequest) Offsets() []sourcesdk.Offset {
 	return a.offsets
 }
 
-func Test_Read(t *testing.T) {
+func Test_Read_MultiConsumer(t *testing.T) {
+
+	streamName := "test-stream-multi-consumer"
+
+	os.Setenv("NUMAFLOW_REPLICA", "1")
+	config := &config.RedisStreamsSourceConfig{
+		URL:               redisURI,
+		Stream:            streamName,
+		ConsumerGroup:     consumerGroupName,
+		ReadFromBeginning: true,
+	}
+	source1, err := New(config, utils.NewLogger())
+	assert.NoError(t, err)
+
+	os.Setenv("NUMAFLOW_REPLICA", "2")
+	source2, err := New(config, utils.NewLogger())
+
+	publishClient := NewRedisClient(redisOptions)
+	writeTestMessages(t, publishClient, []string{"1692632086370-0", "1692632086371-0", "1692632086372-0"}, streamName)
+
+	// Source reads the 1 message but doesn't Ack
+	numMsgs := read(source1, 2, 5*time.Second)
+	assert.Equal(t, 2, numMsgs)
+
+	numMsgs = read(source2, 2, 5*time.Second)
+	assert.Equal(t, 1, numMsgs)
 
 }
 
 func Test_Read_WithBacklog(t *testing.T) {
 	os.Setenv("NUMAFLOW_REPLICA", "1")
-	os.Setenv("NUMAFLOW_DEBUG", "true")
+	streamName := "test-stream-backlog"
+
 	// new RedisStreamsSource with ConsumerGroup Reads but does not Ack
 	config := &config.RedisStreamsSourceConfig{
 		URL:               redisURI,
@@ -86,45 +114,29 @@ func Test_Read_WithBacklog(t *testing.T) {
 
 	// 1 new message published
 	publishClient := NewRedisClient(redisOptions)
-	err = publishClient.Client.XAdd(context.Background(), &redis.XAddArgs{
-		ID:     "1692632086370-0",
-		Stream: streamName,
-		Values: multipleKeysValues,
-	}).Err()
-	assert.NoError(t, err)
+	writeTestMessages(t, publishClient, []string{"1692632086370-0"}, streamName)
 
 	// Source reads the 1 message but doesn't Ack
-	numMsgs := read(source)
+	numMsgs := readDefault(source)
 	assert.Equal(t, 1, numMsgs)
 
 	// no Ack
 
 	// another 2 messages published
-	err = publishClient.Client.XAdd(context.Background(), &redis.XAddArgs{
-		ID:     "1692632086371-0",
-		Stream: streamName,
-		Values: multipleKeysValues,
-	}).Err()
-	assert.NoError(t, err)
-	err = publishClient.Client.XAdd(context.Background(), &redis.XAddArgs{
-		ID:     "1692632086372-0",
-		Stream: streamName,
-		Values: multipleKeysValues,
-	}).Err()
-	assert.NoError(t, err)
+	writeTestMessages(t, publishClient, []string{"1692632086371-0", "1692632086372-0"}, streamName)
 
 	// second RedisStreamsSource with same ConsumerGroup, and same Consumer (imitating a Pod that got restarted) reads and gets
 	// 1 backlog message, and on subsequent Read, gets 2 new messages
 	// this time it Acks all messages
 	source, err = New(config, utils.NewLogger())
 	assert.NoError(t, err)
-	numMsgs = read(source)
+	numMsgs = readDefault(source)
 	assert.Equal(t, 1, numMsgs)
 	// ack
 	offset := sourcesdk.NewOffset([]byte("1692632086370-0"), "0")
 	source.Ack(context.Background(), &ackRequest{offsets: []sourcesdk.Offset{offset}})
 
-	numMsgs = read(source)
+	numMsgs = readDefault(source)
 	assert.Equal(t, 2, numMsgs)
 	offset = sourcesdk.NewOffset([]byte("1692632086371-0"), "0")
 	source.Ack(context.Background(), &ackRequest{offsets: []sourcesdk.Offset{offset}})
@@ -134,16 +146,20 @@ func Test_Read_WithBacklog(t *testing.T) {
 	// imitate the Pod getting restarted again: this time there should be no messages to read
 	source, err = New(config, utils.NewLogger())
 	assert.NoError(t, err)
-	numMsgs = read(source)
+	numMsgs = readDefault(source)
 	assert.Equal(t, 0, numMsgs)
 }
 
 // returns the number of messages read in
-func read(source *redisStreamsSource) int {
+func read(source *redisStreamsSource, count uint64, duration time.Duration) int {
 	msgChannel := make(chan sourcesdk.Message, 50)
-	source.Read(context.Background(), &readRequest{count: 10, timeout: 5 * time.Second}, msgChannel)
+	source.Read(context.Background(), &readRequest{count: count, timeout: duration}, msgChannel)
 	close(msgChannel)
 	return countMessages(msgChannel)
+}
+
+func readDefault(source *redisStreamsSource) int {
+	return read(source, 10, 5*time.Second)
 }
 
 // channel must be closed for this to work
@@ -153,4 +169,15 @@ func countMessages(msgChannel chan sourcesdk.Message) int {
 		msgCounts++
 	}
 	return msgCounts
+}
+
+func writeTestMessages(t *testing.T, publishClient *redisClient, ids []string, streamName string) {
+	for _, id := range ids {
+		err := publishClient.Client.XAdd(context.Background(), &redis.XAddArgs{
+			ID:     id,
+			Stream: streamName,
+			Values: multipleKeysValues,
+		}).Err()
+		assert.NoError(t, err)
+	}
 }
