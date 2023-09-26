@@ -45,7 +45,7 @@ func New(c *config.RedisStreamsSourceConfig, logger *zap.SugaredLogger) (*redisS
 	redisStreamsSource := &redisStreamsSource{
 		stream:       c.Stream,
 		group:        c.ConsumerGroup,
-		consumer:     fmt.Sprintf("%s-%v", c.ConsumerGroup, replica),
+		consumer:     fmt.Sprintf("%s-%s", c.ConsumerGroup, replica),
 		checkBackLog: true,
 		redisClient:  redisClient,
 		log:          logger,
@@ -106,11 +106,11 @@ func (rsSource *redisStreamsSource) createConsumerGroup(ctx context.Context, c *
 }
 
 // Pending returns the number of pending records.
-func (rsSource *redisStreamsSource) Pending(_ context.Context) int64 {
+func (rsSource *redisStreamsSource) Pending(ctx context.Context) int64 {
 	// try calling XINFO GROUPS <stream> and look for 'Lag' key.
 	// For Redis Server < v7.0, this always returns 0; therefore it's recommended to use >= v7.0
 
-	result := rsSource.Client.XInfoGroups(RedisContext, rsSource.stream)
+	result := rsSource.Client.XInfoGroups(ctx, rsSource.stream)
 	groups, err := result.Result()
 	if err != nil {
 		rsSource.log.Errorf("error calling XInfoGroups: %v", err)
@@ -127,7 +127,7 @@ func (rsSource *redisStreamsSource) Pending(_ context.Context) int64 {
 
 }
 
-func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesdk.ReadRequest, messageCh chan<- sourcesdk.Message) {
+func (rsSource *redisStreamsSource) Read(ctx context.Context, readRequest sourcesdk.ReadRequest, messageCh chan<- sourcesdk.Message) {
 
 	rsSource.log.Debugf("Ready to Read: count=%d, duration=%+v", readRequest.Count(), readRequest.TimeOut())
 
@@ -142,7 +142,7 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 
 	for rsSource.checkBackLog {
 
-		xstreams, err := rsSource.processXReadResult("0-0", int64(remainingMsgs), 0*time.Second, messageCh)
+		xstreams, err := rsSource.processXReadResult(ctx, "0-0", int64(remainingMsgs), 0*time.Second, messageCh)
 		if err != nil {
 			rsSource.log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
 			return
@@ -184,7 +184,7 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 		//}
 		// this call will block until either the "remainingMsgs" count has been fulfilled or the remainingTime has elapsed
 		// note: if we ever need true "streaming" here, we should instead repeatedly call with no timeout
-		_, err := rsSource.processXReadResult(">", int64(remainingMsgs), remainingTime, messageCh)
+		_, err := rsSource.processXReadResult(ctx, ">", int64(remainingMsgs), remainingTime, messageCh)
 		if err != nil {
 			rsSource.log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
 			return
@@ -194,13 +194,13 @@ func (rsSource *redisStreamsSource) Read(_ context.Context, readRequest sourcesd
 }
 
 // Ack acknowledges the data from the source.
-func (rsSource *redisStreamsSource) Ack(_ context.Context, request sourcesdk.AckRequest) {
+func (rsSource *redisStreamsSource) Ack(ctx context.Context, request sourcesdk.AckRequest) {
 	offsets := request.Offsets()
 	strOffsets := make([]string, len(offsets))
 	for i, o := range offsets {
 		strOffsets[i] = string(o.Value())
 	}
-	if err := rsSource.Client.XAck(RedisContext, rsSource.stream, rsSource.group, strOffsets...).Err(); err != nil {
+	if err := rsSource.Client.XAck(ctx, rsSource.stream, rsSource.group, strOffsets...).Err(); err != nil {
 		rsSource.log.Errorf("Error performing Ack on offsets %+v: %v", offsets, err)
 	}
 
@@ -214,11 +214,11 @@ func (rsSource *redisStreamsSource) Close() error {
 
 // processXReadResult is used to process the results of XREADGROUP
 // for any messages read, stream them back on message channel
-func (rsSource *redisStreamsSource) processXReadResult(startIndex string, count int64, blockDuration time.Duration, messageCh chan<- sourcesdk.Message) ([]redis.XStream, error) {
+func (rsSource *redisStreamsSource) processXReadResult(ctx context.Context, startIndex string, count int64, blockDuration time.Duration, messageCh chan<- sourcesdk.Message) ([]redis.XStream, error) {
 
 	rsSource.log.Debugf("XReadGroup: startIndex=%q, count=%d, blockDuration=%+v", startIndex, count, blockDuration)
 
-	result := rsSource.Client.XReadGroup(RedisContext, &redis.XReadGroupArgs{
+	result := rsSource.Client.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    rsSource.group,
 		Consumer: rsSource.consumer,
 		Streams:  []string{rsSource.stream, startIndex},
