@@ -132,6 +132,10 @@ func Test_Read_WithBacklog(t *testing.T) {
 	source.Ack(context.Background(), &ackRequest{offsets: []sourcesdk.Offset{offset}})
 
 	// imitate the Pod getting restarted again: this time there should be no messages to read
+	source, err = New(config, utils.NewLogger())
+	assert.NoError(t, err)
+	numMsgs = read(source)
+	assert.Equal(t, 0, numMsgs)
 }
 
 // returns the number of messages read in
