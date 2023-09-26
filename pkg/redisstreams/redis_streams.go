@@ -134,41 +134,29 @@ func (rsSource *redisStreamsSource) Read(ctx context.Context, readRequest source
 	functionStartTime := time.Now()
 	var finalTime time.Time
 	finalTime = functionStartTime.Add(readRequest.TimeOut())
-	remainingMsgs := int(readRequest.Count())
+	msgCount := int(readRequest.Count())
 
 	// if there are messages previously delivered to us that we didn't acknowledge, repeatedly check for that until there are no
 	// messages returned, or until we reach timeout
 	// "0-0" means messages previously delivered to us that we didn't acknowledge
 
-	for rsSource.checkBackLog {
+	//for rsSource.checkBackLog {
 
-		xstreams, err := rsSource.processXReadResult(ctx, "0-0", int64(remainingMsgs), 0*time.Second, messageCh)
-		if err != nil {
-			rsSource.log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
-			return
-		}
-
-		// NOTE: If all messages have been delivered and acknowledged, the XREADGROUP 0-0 call returns an empty
-		// list of messages in the stream. At this point we want to read everything from last delivered which would be indicated by ">"
-		if xstreams != nil && len(xstreams) == 1 {
-			if len(xstreams[0].Messages) == 0 {
-				rsSource.log.Infow("We have delivered and acknowledged all PENDING msgs, setting checkBacklog to false")
-				rsSource.checkBackLog = false
-				break
-			} else {
-				remainingMsgs -= len(xstreams[0].Messages)
-			}
-		} else {
-			//todo: shouldn't need this statement - verify
-		}
-
-		if time.Now().Compare(finalTime) >= 0 || remainingMsgs <= 0 {
-			rsSource.log.Infof("deletethis: checkBackLog=true; returning; finalTime=%+v, time remaining=%+v, remainingMsgs=%d", finalTime, finalTime.Sub(time.Now()), remainingMsgs)
-			return
-		} else {
-
-		}
+	xstreams, err := rsSource.processXReadResult(ctx, "0-0", int64(msgCount), readRequest.TimeOut(), messageCh)
+	if err != nil {
+		rsSource.log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
+		return
 	}
+
+	// NOTE: If all messages have been delivered and acknowledged, the XREADGROUP 0-0 call returns an empty
+	// list of messages in the stream. At this point we want to read everything from last delivered which would be indicated by ">"
+	if len(xstreams) == 1 && len(xstreams[0].Messages) == 0 {
+		rsSource.log.Infow("We have delivered and acknowledged all PENDING msgs, setting checkBacklog to false")
+		rsSource.checkBackLog = false
+	} else {
+		return
+	}
+	//}
 
 	// get undelivered messages up to the count we want and block until the timeout
 	if !rsSource.checkBackLog {
@@ -184,7 +172,7 @@ func (rsSource *redisStreamsSource) Read(ctx context.Context, readRequest source
 		//}
 		// this call will block until either the "remainingMsgs" count has been fulfilled or the remainingTime has elapsed
 		// note: if we ever need true "streaming" here, we should instead repeatedly call with no timeout
-		_, err := rsSource.processXReadResult(ctx, ">", int64(remainingMsgs), remainingTime, messageCh)
+		_, err := rsSource.processXReadResult(ctx, ">", int64(msgCount), remainingTime, messageCh)
 		if err != nil {
 			rsSource.log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
 			return
