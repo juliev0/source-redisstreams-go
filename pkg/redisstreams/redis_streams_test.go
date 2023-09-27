@@ -15,17 +15,11 @@ import (
 )
 
 /*
-Main methods to test:
-Read()
-Pending()
-processXReadResult() (unless we feel it's covered by Read())
-possibly some of the smaller helper functions at the end
-
-For Read():
-- have a very short time out which causes us to run out of time (only 0 can work due to timing differences) - actually is 0 allowed?
-- if above test is no good, another thing we could do is loop doing Read() and just make sure we can get everything in a reasonable amount of time
-- need to have something received and not acked and then a new redisStreamsSource comes up to Read(), and after that can read new messages
-- should test for multiple Consumers in the same ConsumerGroup
+todo:
+add tests for:
+- Pending()
+- maybe processXReadResult() (unless we feel it's covered by Read())
+- possibly some of the smaller helper functions at the end
 */
 
 var (
@@ -38,8 +32,6 @@ var (
 	}
 
 	multipleKeysValues = map[string]string{"test-msg-1": "test-val-1", "test-msg-2": "test-val-2"}
-
-	//multipleKeysValuesJson = json.Marshal(multipleKeysValues)
 )
 
 func init() {

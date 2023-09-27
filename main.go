@@ -15,7 +15,7 @@ import (
 func main() {
 	logger := utils.NewLogger()
 
-	config, err := getConfigFromFile() // todo: probably turn into an environment variable
+	config, err := getConfigFromFile() // todo: maybe turn into an environment variable
 	if err != nil {
 		logger.Panic("Failed to parse config file : ", err)
 	} else {

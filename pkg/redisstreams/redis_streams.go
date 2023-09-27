@@ -139,29 +139,25 @@ func (rsSource *redisStreamsSource) Read(ctx context.Context, readRequest source
 	// if there are messages previously delivered to us that we didn't acknowledge, repeatedly check for that until there are no
 	// messages returned, or until we reach timeout
 	// "0-0" means messages previously delivered to us that we didn't acknowledge
+	if rsSource.checkBackLog {
+		xstreams, err := rsSource.processXReadResult(ctx, "0-0", int64(msgCount), readRequest.TimeOut(), messageCh)
+		if err != nil {
+			rsSource.log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
+			return
+		}
 
-	//for rsSource.checkBackLog {
-
-	xstreams, err := rsSource.processXReadResult(ctx, "0-0", int64(msgCount), readRequest.TimeOut(), messageCh)
-	if err != nil {
-		rsSource.log.Errorf("processXReadResult failed, checkBackLog=%v, err=%s", rsSource.checkBackLog, err)
-		return
+		// NOTE: If all messages have been delivered and acknowledged, the XREADGROUP 0-0 call returns an empty
+		// list of messages in the stream. At this point we want to read everything from last delivered which would be indicated by ">"
+		if len(xstreams) == 1 && len(xstreams[0].Messages) == 0 {
+			rsSource.log.Infow("We have delivered and acknowledged all PENDING msgs, setting checkBacklog to false")
+			rsSource.checkBackLog = false
+		} else {
+			return
+		}
 	}
-
-	// NOTE: If all messages have been delivered and acknowledged, the XREADGROUP 0-0 call returns an empty
-	// list of messages in the stream. At this point we want to read everything from last delivered which would be indicated by ">"
-	if len(xstreams) == 1 && len(xstreams[0].Messages) == 0 {
-		rsSource.log.Infow("We have delivered and acknowledged all PENDING msgs, setting checkBacklog to false")
-		rsSource.checkBackLog = false
-	} else {
-		return
-	}
-	//}
 
 	// get undelivered messages up to the count we want and block until the timeout
 	if !rsSource.checkBackLog {
-		//remainingTime := 0 * time.Second
-		//if readRequest.TimeOut() > 0 {
 		remainingTime := finalTime.Sub(time.Now())
 		if int64(remainingTime) < 0 {
 			rsSource.log.Infof("deletethis: checkBackLog=false; returning: out of time, finalTime=%+v", finalTime)
@@ -169,7 +165,7 @@ func (rsSource *redisStreamsSource) Read(ctx context.Context, readRequest source
 		} else {
 			rsSource.log.Infof("deletethis: checkBackLog=false; about to call processXReadResult(), finalTime=%+v, remainingTime=%+v", finalTime, remainingTime)
 		}
-		//}
+
 		// this call will block until either the "remainingMsgs" count has been fulfilled or the remainingTime has elapsed
 		// note: if we ever need true "streaming" here, we should instead repeatedly call with no timeout
 		_, err := rsSource.processXReadResult(ctx, ">", int64(msgCount), remainingTime, messageCh)
@@ -211,7 +207,7 @@ func (rsSource *redisStreamsSource) processXReadResult(ctx context.Context, star
 		Consumer: rsSource.consumer,
 		Streams:  []string{rsSource.stream, startIndex},
 		Count:    count,
-		Block:    blockDuration, // todo: verify that passing in 0 effectively causes it not to block but does allow it to execute
+		Block:    blockDuration,
 	})
 	xstreams, err := result.Result()
 	if err != nil {
@@ -262,7 +258,6 @@ func (rsSource *redisStreamsSource) xStreamToMessages(xstream redis.XStream) ([]
 
 func produceMsg(inMsg redis.XMessage) (*sourcesdk.Message, error) {
 	var readOffset = sourcesdk.NewOffset([]byte(inMsg.ID), "0")
-	//var readOffset = sourcesdk.NewSimpleOffset([]byte(inMsg.ID)) //todo: can we make a function like this?
 
 	jsonSerialized, err := json.Marshal(inMsg.Values)
 	if err != nil {
@@ -277,19 +272,6 @@ func produceMsg(inMsg redis.XMessage) (*sourcesdk.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	/*isbMsg := isb.Message{
-		Header: isb.Header{
-			MessageInfo: isb.MessageInfo{EventTime: msgTime},
-			ID:          inMsg.ID,
-			Keys:        keys,
-		},
-		Body: isb.Body{Payload: jsonSerialized},
-	}
-
-	return &isb.ReadMessage{
-		ReadOffset: readOffset,
-		Message:    isbMsg,
-	}, nil*/
 
 	msg := sourcesdk.NewMessage(
 		jsonSerialized,

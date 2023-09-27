@@ -1,20 +1,4 @@
-/*
-Copyright 2022 The Numaproj Authors.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
-// TODO: this is copy pasted code - are we okay with that?
+// todo: this is copy/pasted code - are we okay with that?
 // Actually, I did remove the NewInClusterRedisClient() function for greater simplicity, though
 package redisstreams
 
@@ -29,7 +13,6 @@ import (
 // RedisContext is used to pass the context specifically for REDIS operations.
 // A cancelled context during SIGTERM or Ctrl-C that is propagated down will throw a context cancelled error because redis uses context to obtain connection from the connection pool.
 // All redis operations will use the below no-op context.Background() to try to process in-flight messages that we have received prior to the cancellation of the context.
-//var RedisContext = context.Background()
 
 // redisClient datatype to hold redis client attributes.
 type redisClient struct {
